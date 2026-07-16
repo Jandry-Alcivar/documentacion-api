@@ -11,7 +11,9 @@ import {
   DocumentAlert,
   DocumentHistory,
   Procedure,
-  AuditLog
+  AuditLog,
+  Workflow,
+  WorkflowNode
 } from '../models/index.js';
 import * as bcrypt from 'bcryptjs';
 import * as fs from 'fs';
@@ -21,6 +23,8 @@ async function main() {
   console.log('Iniciando la siembra (seed) de la base de datos con Sequelize - Distrito Chone...');
 
   // 1. Limpiar base de datos
+  await WorkflowNode.destroy({ where: {} });
+  await Workflow.destroy({ where: {} });
   await DocumentAlert.destroy({ where: {} });
   await DocumentHistory.destroy({ where: {} });
   await Document.destroy({ where: {} });
@@ -39,7 +43,7 @@ async function main() {
     { name: 'Administrador', description: 'Rol con acceso total al sistema.', permissions: JSON.stringify(['all']) },
     { name: 'Alcalde', description: 'Rol de Máxima Autoridad.', permissions: JSON.stringify(['all']) },
     { name: 'Director Departamental', description: 'Responsable de revisión, aprobación y seguimiento de trámites y documentos.', permissions: JSON.stringify(['dashboard.view', 'procedures.view', 'procedures.manage', 'documents.view', 'documents.manage', 'users.view', 'alerts.view', 'alerts.view.department', 'audit-logs.view']) },
-    { name: 'Funcionario', description: 'Funcionario encargado de registrar y gestionar trámites y documentos.', permissions: JSON.stringify(['dashboard.view', 'procedures.view', 'documents.view', 'documents.create']) },
+    { name: 'Funcionario', description: 'Funcionario encargado de registrar y gestionar trámites y documentos.', permissions: JSON.stringify(['dashboard.view', 'procedures.create', 'procedures.view', 'documents.view', 'documents.create']) },
     { name: 'Recepción Documental', description: 'Funcionario encargado de registrar trámites y documentos iniciales.', permissions: JSON.stringify(['dashboard.view', 'procedures.create', 'procedures.view']) },
     { name: 'Auditor', description: 'Usuario autorizado para consultar bitácoras, reportes e integridad documental.', permissions: JSON.stringify(['dashboard.view', 'reports.view', 'logs.view', 'audit-logs.view']) },
   ];
