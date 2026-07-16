@@ -18,6 +18,8 @@ import catalogRoutes from './routes/catalogs.js';
 import procedureRoutes from './routes/procedures.js';
 import auditRoutes from './routes/audit.js';
 import reportsRoutes from './routes/reports.js';
+import workflowRoutes from './routes/workflows.js';
+import archiveRoutes from './routes/archives.js';
 import { ensureStorageDirs } from './utils/storage.js';
 
 export async function buildApp() {
@@ -45,7 +47,9 @@ export async function buildApp() {
     await sequelize.authenticate();
     console.log('Conexión con PostgreSQL establecida correctamente usando Sequelize.');
 
-    await sequelize.sync({ alter: true });
+    // alter:{drop:false} agrega columnas/índices sin intentar eliminar constraints existentes.
+    // Esto evita SequelizeUnknownConstraintError cuando las FK tienen nombres distintos en la BD.
+    await sequelize.sync({ alter: { drop: false } });
     console.log('Modelos de Sequelize sincronizados con la base de datos.');
   } catch (error) {
     console.error('No se pudo establecer la conexión a la base de datos:', error);
@@ -65,6 +69,8 @@ export async function buildApp() {
   app.use('/api/procedures', procedureRoutes);
   app.use('/api/audit-logs', auditRoutes);
   app.use('/api/reports', reportsRoutes);
+  app.use('/api/workflows', workflowRoutes);
+  app.use('/api/archives', archiveRoutes);
 
   return app;
 }

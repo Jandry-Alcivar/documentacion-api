@@ -100,6 +100,7 @@ export class Department extends Model {
   declare name: string;
   declare description?: string | null;
   declare isActive: boolean;
+  declare parentDepartmentId?: string | null;
   declare readonly createdAt: Date;
   declare readonly updatedAt: Date;
 }
@@ -107,7 +108,8 @@ Department.init({
   id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
   name: { type: DataTypes.STRING, unique: true, allowNull: false },
   description: { type: DataTypes.STRING, allowNull: true },
-  isActive: { type: DataTypes.BOOLEAN, defaultValue: true, allowNull: false }
+  isActive: { type: DataTypes.BOOLEAN, defaultValue: true, allowNull: false },
+  parentDepartmentId: { type: DataTypes.UUID, allowNull: true }
 }, { sequelize, tableName: 'Department', timestamps: true });
 
 // 5. User Model
@@ -152,6 +154,10 @@ export class Procedure extends Model {
   declare typeId: string;
   declare departmentId: string;
   declare assigneeId?: string | null;
+  declare warehouseId?: string | null;
+  declare sectorId?: string | null;
+  declare sectionId?: string | null;
+  declare folderCode?: string | null;
   declare readonly createdAt: Date;
   declare readonly updatedAt: Date;
 
@@ -175,7 +181,11 @@ Procedure.init({
   expirationDate: { type: DataTypes.DATE, allowNull: true },
   typeId: { type: DataTypes.UUID, allowNull: false },
   departmentId: { type: DataTypes.UUID, allowNull: false },
-  assigneeId: { type: DataTypes.UUID, allowNull: true }
+  assigneeId: { type: DataTypes.UUID, allowNull: true },
+  warehouseId: { type: DataTypes.UUID, allowNull: true },
+  sectorId: { type: DataTypes.UUID, allowNull: true },
+  sectionId: { type: DataTypes.UUID, allowNull: true },
+  folderCode: { type: DataTypes.STRING, allowNull: true }
 }, { sequelize, tableName: 'Procedure', timestamps: true });
 
 // 7. Document Model
@@ -347,7 +357,105 @@ AllowedFileType.init({
   isActive: { type: DataTypes.BOOLEAN, defaultValue: true, allowNull: false }
 }, { sequelize, tableName: 'AllowedFileType', timestamps: false });
 
+// 13. Workflow Model
+export class Workflow extends Model {
+  declare id: string;
+  declare name: string;
+  declare description?: string | null;
+  declare procedureTypeId: string;
+  declare isActive: boolean;
+}
+Workflow.init({
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  name: { type: DataTypes.STRING, allowNull: false },
+  description: { type: DataTypes.TEXT, allowNull: true },
+  procedureTypeId: { type: DataTypes.UUID, allowNull: false },
+  isActive: { type: DataTypes.BOOLEAN, defaultValue: true, allowNull: false }
+}, { sequelize, tableName: 'Workflow', timestamps: true });
+
+// 14. WorkflowNode Model
+export class WorkflowNode extends Model {
+  declare id: string;
+  declare workflowId: string;
+  declare name: string;
+  declare departmentId: string;
+  declare maxHours: number;
+  declare isStart: boolean;
+  declare isEnd: boolean;
+  declare requiredDocTypes: string[]; // JSON array of DocumentType IDs
+  declare requiredActivities: string[]; // JSON array of string activities
+  declare typeEnvio: string; // 'PARA' | 'COPIA'
+}
+WorkflowNode.init({
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  workflowId: { type: DataTypes.UUID, allowNull: false },
+  name: { type: DataTypes.STRING, allowNull: false },
+  departmentId: { type: DataTypes.UUID, allowNull: false },
+  maxHours: { type: DataTypes.INTEGER, defaultValue: 24, allowNull: false },
+  isStart: { type: DataTypes.BOOLEAN, defaultValue: false, allowNull: false },
+  isEnd: { type: DataTypes.BOOLEAN, defaultValue: false, allowNull: false },
+  requiredDocTypes: { type: DataTypes.JSONB, defaultValue: [], allowNull: false },
+  requiredActivities: { type: DataTypes.JSONB, defaultValue: [], allowNull: false },
+  typeEnvio: { type: DataTypes.STRING, defaultValue: 'PARA', allowNull: false }
+}, { sequelize, tableName: 'WorkflowNode', timestamps: true });
+
+// 15. Warehouse Model
+export class Warehouse extends Model {
+  declare id: string;
+  declare name: string;
+  declare location: string;
+  declare type: string; // 'GENERAL' | 'AREA'
+}
+Warehouse.init({
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  name: { type: DataTypes.STRING, allowNull: false },
+  location: { type: DataTypes.STRING, allowNull: false },
+  type: { type: DataTypes.STRING, defaultValue: 'GENERAL', allowNull: false }
+}, { sequelize, tableName: 'Warehouse', timestamps: true });
+
+// 16. Sector Model
+export class Sector extends Model {
+  declare id: string;
+  declare name: string;
+  declare warehouseId: string;
+}
+Sector.init({
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  name: { type: DataTypes.STRING, allowNull: false },
+  warehouseId: { type: DataTypes.UUID, allowNull: false }
+}, { sequelize, tableName: 'Sector', timestamps: true });
+
+// 17. Section Model
+export class Section extends Model {
+  declare id: string;
+  declare name: string;
+  declare sectorId: string;
+}
+Section.init({
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  name: { type: DataTypes.STRING, allowNull: false },
+  sectorId: { type: DataTypes.UUID, allowNull: false }
+}, { sequelize, tableName: 'Section', timestamps: true });
+
+// 18. Period Model
+export class Period extends Model {
+  declare id: string;
+  declare startDate: Date;
+  declare endDate: Date;
+  declare status: string; // 'ACTIVO' | 'INACTIVO'
+}
+Period.init({
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  startDate: { type: DataTypes.DATE, allowNull: false },
+  endDate: { type: DataTypes.DATE, allowNull: false },
+  status: { type: DataTypes.STRING, defaultValue: 'ACTIVO', allowNull: false }
+}, { sequelize, tableName: 'Period', timestamps: true });
+
 // Setup Model Associations
+
+// Department self relation (hierarchy)
+Department.belongsTo(Department, { foreignKey: 'parentDepartmentId', as: 'parent' });
+Department.hasMany(Department, { foreignKey: 'parentDepartmentId', as: 'subDepartments' });
 
 // Role <-> User
 Role.hasMany(User, { foreignKey: 'roleId', as: 'users' });
@@ -416,3 +524,27 @@ Template.belongsTo(DocumentType, { foreignKey: 'typeId', as: 'type' });
 // User <-> AuditLog
 User.hasMany(AuditLog, { foreignKey: 'userId', as: 'auditLogs' });
 AuditLog.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
+// Workflow <-> WorkflowNode
+Workflow.hasMany(WorkflowNode, { foreignKey: 'workflowId', as: 'nodes', onDelete: 'CASCADE' });
+WorkflowNode.belongsTo(Workflow, { foreignKey: 'workflowId', as: 'workflow' });
+
+// ProcedureType <-> Workflow
+ProcedureType.hasOne(Workflow, { foreignKey: 'procedureTypeId', as: 'workflow' });
+Workflow.belongsTo(ProcedureType, { foreignKey: 'procedureTypeId', as: 'procedureType' });
+
+// WorkflowNode <-> Department
+WorkflowNode.belongsTo(Department, { foreignKey: 'departmentId', as: 'department' });
+
+// Warehouse <-> Sector
+Warehouse.hasMany(Sector, { foreignKey: 'warehouseId', as: 'sectors', onDelete: 'CASCADE' });
+Sector.belongsTo(Warehouse, { foreignKey: 'warehouseId', as: 'warehouse' });
+
+// Sector <-> Section
+Sector.hasMany(Section, { foreignKey: 'sectorId', as: 'sections', onDelete: 'CASCADE' });
+Section.belongsTo(Sector, { foreignKey: 'sectorId', as: 'sector' });
+
+// Procedure <-> Physical Archive associations
+Procedure.belongsTo(Warehouse, { foreignKey: 'warehouseId', as: 'warehouse' });
+Procedure.belongsTo(Sector, { foreignKey: 'sectorId', as: 'sector' });
+Procedure.belongsTo(Section, { foreignKey: 'sectionId', as: 'section' });
