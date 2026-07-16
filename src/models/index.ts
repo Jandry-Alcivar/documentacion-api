@@ -1,6 +1,6 @@
 import { Sequelize, DataTypes, Model } from 'sequelize';
 
-const dbUrl = process.env.DATABASE_URL || 'postgresql://postgres:PGSQL@localhost:5432/doc_gestion_db';
+const dbUrl = process.env.DATABASE_URL || 'postgresql://postgres:admin123@localhost:5432/doc_gestion_db';
 
 export const sequelize = new Sequelize(dbUrl, {
   dialect: 'postgres',
