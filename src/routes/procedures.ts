@@ -13,24 +13,40 @@ router.get('/', async (request, response) => {
 
   const andClause: any[] = [];
 
+  // 1. Filtro por Estado (Inbox vs Historial General)
   if (view === 'inbox') {
-    if (user.permissions.includes('all') || user.roleName === 'Administrador') {
-       andClause.push({ status: { [Op.ne]: 'FINALIZADO' } });
-    } else {
-      const orClause: any[] = [{ assigneeId: user.id }];
-      if (user.roleName === 'Director Departamental') {
-        orClause.push({ departmentId: user.departmentId });
+    // Bandeja de Entrada solo muestra activos (no finalizados, cerrados o archivados)
+    andClause.push({
+      status: {
+        [Op.notIn]: ['FINALIZADO', 'CERRADO', 'ARCHIVADO']
       }
-      andClause.push({ [Op.or]: orClause });
-    }
-  } else if (user.permissions.includes('all')) {
-    // Admin ve todo
+    });
+  }
+
+  // 2. Filtro por Responsabilidad / Asignación
+  if (user.permissions.includes('all') || user.roleName === 'Administrador') {
+    // Admin ve todos los de la plataforma
   } else {
-    const orClause: any[] = [{ assigneeId: user.id }];
-    if (user.roleName === 'Director Departamental') {
-      orClause.push({ departmentId: user.departmentId });
+    if (view === 'inbox') {
+      if (user.roleName === 'Director Departamental') {
+        // El director ve todo lo activo de su departamento
+        andClause.push({ departmentId: user.departmentId });
+      } else {
+        // El funcionario ve lo asignado a él, o lo que esté sin asignar en su departamento
+        andClause.push({
+          [Op.or]: [
+            { assigneeId: user.id },
+            {
+              departmentId: user.departmentId,
+              assigneeId: null
+            }
+          ]
+        });
+      }
+    } else {
+      // Historial General del Depto: muestra todos los del departamento (activos e históricos de otros funcionarios también)
+      andClause.push({ departmentId: user.departmentId });
     }
-    andClause.push({ [Op.or]: orClause });
   }
 
   const finalWhere = andClause.length > 0 ? { [Op.and]: andClause } : {};
@@ -141,6 +157,97 @@ router.get('/:id', async (request, response) => {
       ]
     });
     if (!procedure) return response.status(404).json({ error: 'Trámite no encontrado.' });
+    return response.json(procedure);
+  } catch (error: any) {
+    return response.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/:id/finalize', async (request, response) => {
+  const { id } = request.params;
+  const { conclusion } = request.body as any;
+
+  try {
+    const procedure = await Procedure.findByPk(id);
+    if (!procedure) return response.status(404).json({ error: 'Trámite no encontrado.' });
+
+    await procedure.update({
+      status: 'FINALIZADO' as any,
+      description: procedure.description + `\n\n[Conclusión]: ${conclusion || 'Finalizado por el usuario.'}`
+    });
+
+    await AuditLog.create({
+      userId: request.user!.id,
+      module: 'Trámites',
+      action: 'Finalizar Trámite',
+      recordId: procedure.id,
+      ipAddress: request.ip || '127.0.0.1',
+      details: `Trámite finalizado. Conclusión: ${conclusion || 'N/A'}`
+    });
+
+    return response.json(procedure);
+  } catch (error: any) {
+    return response.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/:id/revert', async (request, response) => {
+  const { id } = request.params;
+  const { reason } = request.body as any;
+
+  try {
+    const procedure = await Procedure.findByPk(id);
+    if (!procedure) return response.status(404).json({ error: 'Trámite no encontrado.' });
+
+    await procedure.update({
+      status: 'RECIBIDO' as any,
+      warehouseId: null,
+      sectorId: null,
+      sectionId: null,
+      folderCode: null,
+      description: procedure.description + `\n\n[Reversión]: ${reason || 'Trámite reabierto.'}`
+    });
+
+    await AuditLog.create({
+      userId: request.user!.id,
+      module: 'Trámites',
+      action: 'Revertir Finalización',
+      recordId: procedure.id,
+      ipAddress: request.ip || '127.0.0.1',
+      details: `Reversión de finalización. Motivo: ${reason || 'N/A'}`
+    });
+
+    return response.json(procedure);
+  } catch (error: any) {
+    return response.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/:id/return', async (request, response) => {
+  const { id } = request.params;
+  const { notes } = request.body as any;
+
+  try {
+    const procedure = await Procedure.findByPk(id);
+    if (!procedure) return response.status(404).json({ error: 'Trámite no encontrado.' });
+
+    const creatorId = procedure.applicantId;
+
+    await procedure.update({
+      status: 'OBSERVADO' as any,
+      assigneeId: creatorId || procedure.assigneeId,
+      description: procedure.description + `\n\n[Devolución]: ${notes || 'Revisión solicitada.'}`
+    });
+
+    await AuditLog.create({
+      userId: request.user!.id,
+      module: 'Trámites',
+      action: 'Devolver Trámite',
+      recordId: procedure.id,
+      ipAddress: request.ip || '127.0.0.1',
+      details: `Trámite devuelto. Observación: ${notes || 'N/A'}`
+    });
+
     return response.json(procedure);
   } catch (error: any) {
     return response.status(500).json({ error: error.message });

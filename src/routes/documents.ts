@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
+import archiver from 'archiver';
 import { DocStatus, Document, DocumentAlert, DocumentHistory, AllowedFileType, Department, User, AuditLog, DocumentType, sequelize } from '../models/index.js';
 import { Op } from 'sequelize';
 import * as path from 'path';
@@ -310,7 +311,8 @@ router.post('/', upload.single('file'), async (req, res) => {
       creatorId: req.user!.id,
       departmentId: req.user!.departmentId,
       status,
-      parentId
+      parentId,
+      procedureId: req.body.procedureId || null
     });
 
     // Guardar en el historial
@@ -781,6 +783,123 @@ router.post('/:id/verify', async (req, res) => {
     return res.json(verification);
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
+  }
+});
+
+// Aprobación con firma digital (Líder / Alcalde)
+router.post('/:id/sign-and-approve', upload.single('file'), async (req, res) => {
+  const { id } = req.params;
+  const user = req.user!;
+
+  if (!req.file) {
+    return res.status(400).json({ error: 'Debe adjuntar el archivo PDF firmado.' });
+  }
+
+  try {
+    const doc = await Document.findByPk(id as string);
+    if (!doc) return res.status(404).json({ error: 'Documento no encontrado.' });
+
+    const sensitiveIds = await getSensitiveTypeIds();
+    const isConfidential = sensitiveIds.includes(doc.typeId || '');
+
+    if (isConfidential) {
+      if (!user.permissions.includes('all')) {
+        return res.status(403).json({ error: 'Solo el Alcalde puede firmar documentos confidenciales.' });
+      }
+    } else {
+      if (user.roleName !== 'Director Departamental' || user.departmentId !== doc.departmentId) {
+        return res.status(403).json({ error: 'Solo el líder del departamento puede firmar este documento.' });
+      }
+    }
+
+    const fileBuffer = req.file.buffer;
+    const hash = calculateBufferHash(fileBuffer);
+    const savedFile = await saveDocumentFile(req.file.originalname, fileBuffer);
+
+    // Eliminar físico anterior
+    if (doc.fileUrl) {
+      await deletePhysicalFile(doc.fileUrl);
+    }
+
+    let finalStatus: DocStatus = DocStatus.APPROVED;
+    if (doc.parentId) {
+      finalStatus = DocStatus.RESPONDED;
+      await Document.update(
+        { status: 'RESPONDED' as any },
+        { where: { id: doc.parentId } }
+      );
+    }
+
+    await doc.update({
+      fileUrl: savedFile.relativeUrl,
+      fileHash: hash,
+      status: finalStatus,
+      rejectionNotes: null
+    });
+
+    await DocumentHistory.create({
+      documentId: doc.id,
+      userId: user.id,
+      action: 'APPROVE',
+      fileHashBefore: doc.fileHash,
+      fileHashAfter: hash,
+      changesDescription: `Documento firmado digitalmente y aprobado. Hash: ${hash}`
+    });
+
+    await AuditLog.create({
+      userId: user.id,
+      module: 'Documentos',
+      action: 'Firma y Aprobación',
+      recordId: doc.id,
+      ipAddress: req.ip || '127.0.0.1',
+      details: `Documento firmado y aprobado: ${doc.title}`
+    });
+
+    return res.json(doc);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// Descargar todos los documentos de un trámite en ZIP
+router.get('/procedure/:procedureId/download-zip', async (req, res) => {
+  const { procedureId } = req.params;
+
+  try {
+    const docs = await Document.findAll({
+      where: { procedureId, deletedAt: null }
+    });
+
+    if (docs.length === 0) {
+      return res.status(404).json({ error: 'No se encontraron documentos para este trámite.' });
+    }
+
+    // Configurar cabeceras de respuesta
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename=tramite-${procedureId}.zip`);
+
+    const archive = (archiver as any)('zip', { zlib: { level: 9 } });
+    archive.on('error', (err: any) => {
+      throw err;
+    });
+
+    archive.pipe(res);
+
+    for (const doc of docs) {
+      if (doc.fileUrl) {
+        const absolutePath = getAbsolutePathFromUrl(doc.fileUrl);
+        if (fs.existsSync(absolutePath)) {
+          const filename = doc.title.replace(/[/\\?%*:|"<>]/g, '-') + path.extname(absolutePath);
+          archive.file(absolutePath, { name: filename });
+        }
+      }
+    }
+
+    await archive.finalize();
+  } catch (error: any) {
+    if (!res.headersSent) {
+      return res.status(500).json({ error: error.message });
+    }
   }
 });
 
