@@ -35,9 +35,9 @@ export async function buildApp() {
     allowedHeaders: ['Content-Type', 'Authorization']
   }));
 
-  // Middlewares para analizar el cuerpo de la solicitud
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  // Middlewares para analizar el cuerpo de la solicitud con límites aumentados
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
   // Configurar archivos estáticos (para descargar documentos y plantillas)
   app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));

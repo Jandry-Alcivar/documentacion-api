@@ -1,13 +1,23 @@
 import { Router } from 'express';
 import multer from 'multer';
 import archiver from 'archiver';
-import { DocStatus, Document, DocumentAlert, DocumentHistory, AllowedFileType, Department, User, AuditLog, DocumentType, sequelize } from '../models/index.js';
+import { DocStatus, Document, DocumentAlert, DocumentHistory, AllowedFileType, Department, User, AuditLog, DocumentType, sequelize, Procedure } from '../models/index.js';
 import { Op } from 'sequelize';
 import * as path from 'path';
 import * as fs from 'fs';
 import { saveDocumentFile, getAbsolutePathFromUrl, deletePhysicalFile } from '../utils/storage.js';
 import { calculateBufferHash, calculateFileHash } from '../utils/hash.js';
 import { authenticate } from '../middlewares/auth.js';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const signerModule = require('node-signpdf');
+const signer = signerModule.default || signerModule;
+
+const plainAddPlaceholderModule = require('node-signpdf/dist/helpers/plainAddPlaceholder');
+const plainAddPlaceholder = typeof plainAddPlaceholderModule === 'function'
+  ? plainAddPlaceholderModule
+  : (plainAddPlaceholderModule.plainAddPlaceholder || plainAddPlaceholderModule.default || plainAddPlaceholderModule);
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -34,6 +44,9 @@ async function getSensitiveTypeIds(): Promise<string[]> {
 // Helper para verificar integridad física en el disco
 async function verifyIntegrity(doc: any) {
   try {
+    if (!doc.fileUrl) {
+      return { isValid: true, noFile: true };
+    }
     const absolutePath = getAbsolutePathFromUrl(doc.fileUrl);
     if (!fs.existsSync(absolutePath)) {
       return { isValid: false, error: 'Archivo físico no encontrado en el servidor.' };
@@ -488,6 +501,16 @@ router.post('/:id/submit', async (req, res) => {
 
     await doc.update({ status: nextStatus });
 
+    // Actualizar estado de trámite automáticamente
+    if (doc.procedureId) {
+      const proc = await Procedure.findByPk(doc.procedureId);
+      if (proc) {
+        await proc.update({
+          status: 'EN_REVISION' as any
+        });
+      }
+    }
+
     await DocumentHistory.create({
       documentId: doc.id,
       userId: req.user!.id,
@@ -594,6 +617,17 @@ router.post('/:id/reject', async (req, res) => {
       status: DocStatus.REJECTED,
       rejectionNotes: notes
     });
+
+    // Actualizar estado de trámite automáticamente a OBSERVADO
+    if (doc.procedureId) {
+      const proc = await Procedure.findByPk(doc.procedureId);
+      if (proc) {
+        await proc.update({
+          status: 'OBSERVADO' as any,
+          description: proc.description + `\n\n[Devolución por Jefatura]: ${notes}`
+        });
+      }
+    }
 
     await DocumentHistory.create({
       documentId: doc.id,
@@ -786,13 +820,21 @@ router.post('/:id/verify', async (req, res) => {
   }
 });
 
-// Aprobación con firma digital (Líder / Alcalde)
-router.post('/:id/sign-and-approve', upload.single('file'), async (req, res) => {
+// Aprobación con firma digital (Líder / Alcalde) - Firma criptográfica con .p12 y contraseña
+router.post('/:id/sign-and-approve', upload.fields([
+  { name: 'file', maxCount: 1 },
+  { name: 'certificate', maxCount: 1 }
+]), async (req, res) => {
   const { id } = req.params;
+  const { password } = req.body as { password?: string };
   const user = req.user!;
 
-  if (!req.file) {
-    return res.status(400).json({ error: 'Debe adjuntar el archivo PDF firmado.' });
+  const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+  const pdfFile = files?.['file']?.[0];
+  const certFile = files?.['certificate']?.[0];
+
+  if (!pdfFile || !certFile || !password) {
+    return res.status(400).json({ error: 'Debe adjuntar el PDF, el certificado .p12 y la contraseña.' });
   }
 
   try {
@@ -812,9 +854,40 @@ router.post('/:id/sign-and-approve', upload.single('file'), async (req, res) => 
       }
     }
 
-    const fileBuffer = req.file.buffer;
-    const hash = calculateBufferHash(fileBuffer);
-    const savedFile = await saveDocumentFile(req.file.originalname, fileBuffer);
+    const fileBuffer = pdfFile.buffer;
+    const certBuffer = certFile.buffer;
+
+    // 1. Añadir el placeholder vacío para firma PKCS#7 en el PDF
+    let pdfWithPlaceholder: Buffer;
+    try {
+      pdfWithPlaceholder = plainAddPlaceholder({
+        pdfBuffer: fileBuffer,
+        reason: 'Firma Digital GAD Junín',
+        contactInfo: user.email,
+        name: user.name,
+        location: 'Junín, Manabí, Ecuador',
+        signatureLength: 8192,
+      });
+    } catch (placeholderError: any) {
+      console.error('Error al añadir placeholder:', placeholderError);
+      return res.status(500).json({ error: `Error al preparar el PDF para firma: ${placeholderError.message}` });
+    }
+
+    // 2. Firmar el PDF
+    let signedPdf: Buffer;
+    try {
+      signedPdf = signer.sign(
+        pdfWithPlaceholder,
+        certBuffer,
+        { passphrase: password }
+      );
+    } catch (signError: any) {
+      console.error('Error al firmar PDF:', signError);
+      return res.status(400).json({ error: `Contraseña incorrecta o certificado .p12 inválido: ${signError.message}` });
+    }
+
+    const hash = calculateBufferHash(signedPdf);
+    const savedFile = await saveDocumentFile(pdfFile.originalname, signedPdf);
 
     // Eliminar físico anterior
     if (doc.fileUrl) {
@@ -837,13 +910,23 @@ router.post('/:id/sign-and-approve', upload.single('file'), async (req, res) => 
       rejectionNotes: null
     });
 
+    // Actualizar estado de trámite automáticamente a FINALIZADO
+    if (doc.procedureId) {
+      const proc = await Procedure.findByPk(doc.procedureId);
+      if (proc) {
+        await proc.update({
+          status: 'FINALIZADO' as any
+        });
+      }
+    }
+
     await DocumentHistory.create({
       documentId: doc.id,
       userId: user.id,
       action: 'APPROVE',
       fileHashBefore: doc.fileHash,
       fileHashAfter: hash,
-      changesDescription: `Documento firmado digitalmente y aprobado. Hash: ${hash}`
+      changesDescription: `Documento firmado digitalmente (.p12) y aprobado. Hash: ${hash}`
     });
 
     await AuditLog.create({
@@ -852,7 +935,7 @@ router.post('/:id/sign-and-approve', upload.single('file'), async (req, res) => 
       action: 'Firma y Aprobación',
       recordId: doc.id,
       ipAddress: req.ip || '127.0.0.1',
-      details: `Documento firmado y aprobado: ${doc.title}`
+      details: `Documento firmado digitalmente y aprobado: ${doc.title}`
     });
 
     return res.json(doc);

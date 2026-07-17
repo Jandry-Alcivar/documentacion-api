@@ -20,7 +20,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 async function main() {
-  console.log('Iniciando la siembra (seed) de la base de datos con Sequelize - Distrito Chone...');
+  console.log('Iniciando la siembra (seed) de la base de datos con Sequelize - GAD Junín...');
 
   // 1. Limpiar base de datos
   await WorkflowNode.destroy({ where: {} });
@@ -96,7 +96,7 @@ async function main() {
 
   const usersData = [
     { email: 'admin@gob.gob', name: 'Administrador Sistema', roleId: roles['Administrador'].id, departmentId: deptoTech.id },
-    { email: 'alcalde@gob.gob', name: 'Alcalde Chone', roleId: roles['Alcalde'].id, departmentId: deptoGeneral.id },
+    { email: 'alcalde@gob.gob', name: 'Alcalde Junín', roleId: roles['Alcalde'].id, departmentId: deptoGeneral.id },
     { email: 'lider.rrhh@gob.gob', name: 'Director Recursos Humanos', roleId: roles['Director Departamental'].id, departmentId: deptoRRHH.id },
     { email: 'empleado.rrhh@gob.gob', name: 'Funcionario Recursos Humanos', roleId: roles['Funcionario'].id, departmentId: deptoRRHH.id },
     { email: 'lider.tech@gob.gob', name: 'Director TI', roleId: roles['Director Departamental'].id, departmentId: deptoTech.id },
