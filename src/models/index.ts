@@ -209,6 +209,7 @@ export class Document extends Model {
   declare rejectionNotes?: string | null;
   declare deletedAt?: Date | null;
   declare deletedById?: string | null;
+  declare signatures?: any[] | null;
   declare readonly createdAt: Date;
   declare readonly updatedAt: Date;
 
@@ -242,7 +243,8 @@ Document.init({
   parentId: { type: DataTypes.UUID, allowNull: true },
   rejectionNotes: { type: DataTypes.TEXT, allowNull: true },
   deletedAt: { type: DataTypes.DATE, allowNull: true },
-  deletedById: { type: DataTypes.STRING, allowNull: true }
+  deletedById: { type: DataTypes.STRING, allowNull: true },
+  signatures: { type: DataTypes.JSONB, defaultValue: [], allowNull: true }
 }, { sequelize, tableName: 'Document', timestamps: true });
 
 // 8. DocumentHistory Model

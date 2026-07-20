@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import archiver from 'archiver';
-import { DocStatus, Document, DocumentAlert, DocumentHistory, AllowedFileType, Department, User, AuditLog, DocumentType, sequelize, Procedure } from '../models/index.js';
+import { DocStatus, Document, DocumentAlert, DocumentHistory, AllowedFileType, Department, User, AuditLog, DocumentType, sequelize, Procedure, Workflow, WorkflowNode } from '../models/index.js';
 import { Op } from 'sequelize';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -97,7 +97,14 @@ router.get('/', async (req, res) => {
   // Filtros de búsqueda y categorías
   if (category) andClause.push({ typeId: category as string });
   if (status) andClause.push({ status: status as DocStatus });
-  if (departmentId) andClause.push({ departmentId });
+  if (departmentId) {
+    andClause.push({
+      [Op.or]: [
+        { departmentId },
+        sequelize.literal(`"Document"."signatures" @> '[{"departmentId": "${departmentId}"}]'`)
+      ]
+    });
+  }
   if (search) {
     andClause.push({
       [Op.or]: [
@@ -125,13 +132,17 @@ router.get('/', async (req, res) => {
         typeId: { [Op.notIn]: sensitiveIds }
       },
       { targetDepartmentId: user.departmentId },
-      { creatorId: user.id }
+      { creatorId: user.id },
+      { '$procedure.departmentId$': user.departmentId },
+      sequelize.literal(`"Document"."signatures" @> '[{"departmentId": "${user.departmentId}"}]'`)
     );
   } else if (user.roleName === 'Alcalde') {
     visibilityOr.push(
       { isConfidential: true },
       { typeId: { [Op.in]: sensitiveIds } },
-      { status: DocStatus.APPROVED }
+      { status: DocStatus.APPROVED },
+      { '$procedure.departmentId$': user.departmentId },
+      sequelize.literal(`"Document"."signatures" @> '[{"departmentId": "${user.departmentId}"}]'`)
     );
   }
 
@@ -144,7 +155,12 @@ router.get('/', async (req, res) => {
       where: { [Op.and]: andClause },
       include: [
         { association: 'type' },
-        { association: 'procedure' },
+        { 
+          association: 'procedure',
+          include: [
+            { association: 'department', attributes: ['id', 'name'] }
+          ]
+        },
         { association: 'creator', attributes: ['id', 'name', 'email'] },
         { association: 'department', attributes: ['id', 'name'] },
         { association: 'currentAssignee', attributes: ['id', 'name'] },
@@ -201,13 +217,25 @@ router.get('/:id', async (req, res) => {
   try {
     const doc = await Document.findByPk(id, {
       include: [
+        { 
+          association: 'procedure',
+          include: [
+            { association: 'department', attributes: ['id', 'name'] }
+          ]
+        },
         { association: 'creator', attributes: ['id', 'name', 'email', 'departmentId'] },
         { association: 'department', attributes: ['id', 'name'] },
         { association: 'currentAssignee', attributes: ['id', 'name'] },
         {
           association: 'history',
           include: [
-            { association: 'user', attributes: ['name', 'roleId'] }
+            { 
+              association: 'user', 
+              attributes: ['name', 'roleId', 'departmentId'],
+              include: [
+                { association: 'department', attributes: ['id', 'name'] }
+              ]
+            }
           ]
         },
         {
@@ -232,18 +260,19 @@ router.get('/:id', async (req, res) => {
     const user = req.user!;
     const isOwner = doc.creatorId === user.id;
     const inSameDept = doc.departmentId === user.departmentId;
+    const inProcedureDept = doc.procedure && doc.procedure.departmentId === user.departmentId;
     const sensitiveIds = await getSensitiveTypeIds();
     const isConfidential = doc.isConfidential || sensitiveIds.includes(doc.typeId || '');
 
-    if (user.roleName === 'Funcionario' && !isOwner && doc.status !== DocStatus.APPROVED && doc.currentAssigneeId !== user.id) {
+    if (user.roleName === 'Funcionario' && !isOwner && doc.status !== DocStatus.APPROVED && doc.currentAssigneeId !== user.id && !inProcedureDept) {
       return res.status(403).json({ error: 'No tienes permisos para ver este documento.' });
     }
 
-    if (user.roleName === 'Director Departamental' && !inSameDept && doc.targetDepartmentId !== user.departmentId && !isOwner) {
+    if (user.roleName === 'Director Departamental' && !inSameDept && doc.targetDepartmentId !== user.departmentId && !isOwner && !inProcedureDept) {
       return res.status(403).json({ error: 'No tienes permisos para ver este documento.' });
     }
 
-    if (isConfidential && !user.permissions.includes('all') && !isOwner) {
+    if (isConfidential && !user.permissions.includes('all') && !isOwner && !inProcedureDept) {
       return res.status(403).json({ error: 'Acceso denegado. Este es un documento confidencial.' });
     }
 
@@ -530,7 +559,7 @@ router.post('/:id/approve', async (req, res) => {
   const user = req.user!;
 
   try {
-    const doc = await Document.findByPk(id);
+    const doc = await Document.findByPk(id, { include: [{ association: 'procedure' }] });
     if (!doc) return res.status(404).json({ error: 'Documento no encontrado.' });
 
     const sensitiveIds = await getSensitiveTypeIds();
@@ -545,8 +574,10 @@ router.post('/:id/approve', async (req, res) => {
         return res.status(400).json({ error: 'El documento no está pendiente de la firma de la Alcaldía.' });
       }
     } else {
-      if (user.roleName !== 'Director Departamental' || user.departmentId !== doc.departmentId) {
-        return res.status(403).json({ error: 'Solo el líder del departamento puede aprobar este documento.' });
+      const targetDeptId = doc.procedure ? doc.procedure.departmentId : doc.departmentId;
+      const isLeaderOrMayor = user.roleName === 'Director Departamental' || user.roleName === 'Alcalde';
+      if (!isLeaderOrMayor || user.departmentId !== targetDeptId) {
+        return res.status(403).json({ error: 'Solo el líder del departamento responsable del trámite puede aprobar este documento.' });
       }
       if (doc.status !== DocStatus.PENDING_LEADER) {
         return res.status(400).json({ error: 'El documento no está en estado pendiente de aprobación.' });
@@ -598,7 +629,7 @@ router.post('/:id/reject', async (req, res) => {
   }
 
   try {
-    const doc = await Document.findByPk(id);
+    const doc = await Document.findByPk(id, { include: [{ association: 'procedure' }] });
     if (!doc) return res.status(404).json({ error: 'Documento no encontrado.' });
 
     const isConfidential = doc.typeId === 'QUEJA' || doc.typeId === 'RENUNCIA';
@@ -608,8 +639,10 @@ router.post('/:id/reject', async (req, res) => {
         return res.status(403).json({ error: 'Solo el Alcalde puede rechazar trámites confidenciales.' });
       }
     } else {
-      if (user.roleName !== 'Director Departamental' || user.departmentId !== doc.departmentId) {
-        return res.status(403).json({ error: 'Solo el líder del departamento puede rechazar este documento.' });
+      const targetDeptId = doc.procedure ? doc.procedure.departmentId : doc.departmentId;
+      const isLeaderOrMayor = user.roleName === 'Director Departamental' || user.roleName === 'Alcalde';
+      if (!isLeaderOrMayor || user.departmentId !== targetDeptId) {
+        return res.status(403).json({ error: 'Solo el líder del departamento responsable del trámite puede rechazar este documento.' });
       }
     }
 
@@ -838,19 +871,44 @@ router.post('/:id/sign-and-approve', upload.fields([
   }
 
   try {
-    const doc = await Document.findByPk(id as string);
+    const doc = await Document.findByPk(id as string, { include: [{ association: 'procedure' }] });
     if (!doc) return res.status(404).json({ error: 'Documento no encontrado.' });
+
+    const dbUser = await User.findByPk(user.id, {
+      include: [
+        { association: 'role' },
+        { association: 'department' }
+      ]
+    });
+
+    const signaturePos = req.body.signaturePos ? JSON.parse(req.body.signaturePos) : null;
+    const signatureDate = req.body.signatureDate || new Date().toISOString();
+
+    let updatedSignatures = doc.signatures ? [...doc.signatures] : [];
+    if (signaturePos) {
+      updatedSignatures.push({
+        x: signaturePos.x,
+        y: signaturePos.y,
+        date: signatureDate,
+        signerName: dbUser?.name || user.name,
+        signerRole: dbUser?.role?.name || user.roleName || 'Autoridad',
+        departmentName: dbUser?.department?.name || 'GAD Junín',
+        departmentId: dbUser?.departmentId || user.departmentId
+      });
+    }
 
     const sensitiveIds = await getSensitiveTypeIds();
     const isConfidential = sensitiveIds.includes(doc.typeId || '');
+    const targetDeptId = doc.procedure ? doc.procedure.departmentId : doc.departmentId;
 
     if (isConfidential) {
       if (!user.permissions.includes('all')) {
         return res.status(403).json({ error: 'Solo el Alcalde puede firmar documentos confidenciales.' });
       }
     } else {
-      if (user.roleName !== 'Director Departamental' || user.departmentId !== doc.departmentId) {
-        return res.status(403).json({ error: 'Solo el líder del departamento puede firmar este documento.' });
+      const isLeaderOrMayor = user.roleName === 'Director Departamental' || user.roleName === 'Alcalde';
+      if (!isLeaderOrMayor || user.departmentId !== targetDeptId) {
+        return res.status(403).json({ error: 'Solo el líder del departamento responsable del trámite puede firmar este documento.' });
       }
     }
 
@@ -894,30 +952,89 @@ router.post('/:id/sign-and-approve', upload.fields([
       await deletePhysicalFile(doc.fileUrl);
     }
 
-    let finalStatus: DocStatus = DocStatus.APPROVED;
-    if (doc.parentId) {
-      finalStatus = DocStatus.RESPONDED;
-      await Document.update(
-        { status: 'RESPONDED' as any },
-        { where: { id: doc.parentId } }
-      );
-    }
+    // Verificar si el trámite tiene un flujo de trabajo (workflow) activo
+    let hasNextStep = false;
+    let nextNode: any = null;
 
-    await doc.update({
-      fileUrl: savedFile.relativeUrl,
-      fileHash: hash,
-      status: finalStatus,
-      rejectionNotes: null
-    });
-
-    // Actualizar estado de trámite automáticamente a FINALIZADO
     if (doc.procedureId) {
       const proc = await Procedure.findByPk(doc.procedureId);
       if (proc) {
-        await proc.update({
-          status: 'FINALIZADO' as any
+        // Buscar el flujo de trabajo para el tipo de trámite
+        const workflow = await Workflow.findOne({
+          where: { procedureTypeId: proc.typeId, isActive: true },
+          include: [{ association: 'nodes' }]
         });
+
+        if (workflow && workflow.nodes && workflow.nodes.length > 0) {
+          // Ordenar los nodos por su fecha de creación para mantener la secuencia
+          const nodes = [...workflow.nodes].sort((a: any, b: any) => a.createdAt.getTime() - b.createdAt.getTime());
+          const currentIdx = nodes.findIndex((n: any) => n.departmentId === proc.departmentId);
+
+          if (currentIdx !== -1 && currentIdx < nodes.length - 1) {
+            hasNextStep = true;
+            nextNode = nodes[currentIdx + 1];
+          }
+        }
+
+        if (hasNextStep && nextNode) {
+          // Si hay un siguiente paso, derivar el trámite a ese departamento
+          await proc.update({
+            departmentId: nextNode.departmentId,
+            status: 'EN_REVISION' as any,
+            assigneeId: null // Se limpia el asignado específico para que el nuevo departamento lo gestione
+          });
+
+          // Poner el documento en estado PENDING_LEADER de nuevo, pero con target en el nuevo departamento
+          await doc.update({
+            fileUrl: savedFile.relativeUrl,
+            fileHash: hash,
+            status: DocStatus.PENDING_LEADER,
+            targetDepartmentId: nextNode.departmentId,
+            rejectionNotes: null,
+            signatures: updatedSignatures
+          });
+        } else {
+          // Si es el último paso o no tiene flujo, finalizar el trámite
+          await proc.update({
+            status: 'FINALIZADO' as any
+          });
+
+          let finalStatus: DocStatus = DocStatus.APPROVED;
+          if (doc.parentId) {
+            finalStatus = DocStatus.RESPONDED;
+            await Document.update(
+              { status: 'RESPONDED' as any },
+              { where: { id: doc.parentId } }
+            );
+          }
+
+          await doc.update({
+            fileUrl: savedFile.relativeUrl,
+            fileHash: hash,
+            status: finalStatus,
+            rejectionNotes: null,
+            signatures: updatedSignatures
+          });
+        }
       }
+    } else {
+      // Documento suelto
+      let finalStatus: DocStatus = DocStatus.APPROVED;
+      if (doc.parentId) {
+        finalStatus = DocStatus.RESPONDED;
+        await Document.update(
+          { status: 'RESPONDED' as any },
+          { where: { id: doc.parentId } }
+        );
+      }
+
+      await doc.update({
+        fileUrl: savedFile.relativeUrl,
+        fileHash: hash,
+        status: finalStatus,
+        rejectionNotes: null,
+        signatures: updatedSignatures
+      });
     }
 
     await DocumentHistory.create({

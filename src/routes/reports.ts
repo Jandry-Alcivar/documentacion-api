@@ -9,7 +9,8 @@ router.use(authenticate);
 // /api/reports/procedures
 router.get('/procedures', async (req, res) => {
   const user = req.user!;
-  if (!user.permissions?.includes('all') && user.roleName !== 'Administrador') {
+  const permissions = user.permissions || [];
+  if (!permissions.includes('reports.view') && !permissions.includes('all') && user.roleName !== 'Administrador') {
     return res.status(403).json({ error: 'Acceso denegado a reportes.' });
   }
 
@@ -80,7 +81,8 @@ router.get('/procedures', async (req, res) => {
 // /api/reports/documents
 router.get('/documents', async (req, res) => {
   const user = req.user!;
-  if (!user.permissions?.includes('all') && user.roleName !== 'Administrador') {
+  const permissions = user.permissions || [];
+  if (!permissions.includes('reports.view') && !permissions.includes('all') && user.roleName !== 'Administrador') {
     return res.status(403).json({ error: 'Acceso denegado a reportes.' });
   }
 
@@ -140,7 +142,8 @@ router.get('/documents', async (req, res) => {
 // /api/reports/dashboard
 router.get('/dashboard', async (req, res) => {
   const user = req.user!;
-  if (!user.permissions?.includes('all') && user.roleName !== 'Administrador') {
+  const permissions = user.permissions || [];
+  if (!permissions.includes('dashboard.view') && !permissions.includes('all') && user.roleName !== 'Administrador') {
     return res.status(403).json({ error: 'Acceso denegado.' });
   }
 
