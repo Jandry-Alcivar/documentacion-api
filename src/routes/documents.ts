@@ -575,9 +575,10 @@ router.post('/:id/approve', async (req, res) => {
       }
     } else {
       const targetDeptId = doc.procedure ? doc.procedure.departmentId : doc.departmentId;
-      const isLeaderOrMayor = user.roleName === 'Director Departamental' || user.roleName === 'Alcalde';
-      if (!isLeaderOrMayor || user.departmentId !== targetDeptId) {
-        return res.status(403).json({ error: 'Solo el líder del departamento responsable del trámite puede aprobar este documento.' });
+      const isSameDepartment = user.departmentId === targetDeptId;
+      const isMayor = user.roleName === 'Alcalde';
+      if (!isSameDepartment && !isMayor) {
+        return res.status(403).json({ error: 'Solo los miembros del departamento responsable o el Alcalde pueden aprobar este documento.' });
       }
       if (doc.status !== DocStatus.PENDING_LEADER) {
         return res.status(400).json({ error: 'El documento no está en estado pendiente de aprobación.' });
@@ -640,9 +641,10 @@ router.post('/:id/reject', async (req, res) => {
       }
     } else {
       const targetDeptId = doc.procedure ? doc.procedure.departmentId : doc.departmentId;
-      const isLeaderOrMayor = user.roleName === 'Director Departamental' || user.roleName === 'Alcalde';
-      if (!isLeaderOrMayor || user.departmentId !== targetDeptId) {
-        return res.status(403).json({ error: 'Solo el líder del departamento responsable del trámite puede rechazar este documento.' });
+      const isSameDepartment = user.departmentId === targetDeptId;
+      const isMayor = user.roleName === 'Alcalde';
+      if (!isSameDepartment && !isMayor) {
+        return res.status(403).json({ error: 'Solo los miembros del departamento responsable o el Alcalde pueden rechazar este documento.' });
       }
     }
 
@@ -906,9 +908,10 @@ router.post('/:id/sign-and-approve', upload.fields([
         return res.status(403).json({ error: 'Solo el Alcalde puede firmar documentos confidenciales.' });
       }
     } else {
-      const isLeaderOrMayor = user.roleName === 'Director Departamental' || user.roleName === 'Alcalde';
-      if (!isLeaderOrMayor || user.departmentId !== targetDeptId) {
-        return res.status(403).json({ error: 'Solo el líder del departamento responsable del trámite puede firmar este documento.' });
+      const isSameDepartment = user.departmentId === targetDeptId;
+      const isMayor = user.roleName === 'Alcalde';
+      if (!isSameDepartment && !isMayor) {
+        return res.status(403).json({ error: 'Solo los miembros del departamento responsable o el Alcalde pueden firmar este documento.' });
       }
     }
 

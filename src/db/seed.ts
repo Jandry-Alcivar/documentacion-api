@@ -43,8 +43,8 @@ async function main() {
     { name: 'Administrador', description: 'Rol con acceso total al sistema.', permissions: JSON.stringify(['all']) },
     { name: 'Alcalde', description: 'Rol de Máxima Autoridad.', permissions: JSON.stringify(['all']) },
     { name: 'Director Departamental', description: 'Responsable de revisión, aprobación y seguimiento de trámites y documentos.', permissions: JSON.stringify(['dashboard.view', 'procedures.view', 'procedures.manage', 'documents.view', 'documents.manage', 'users.view', 'alerts.view', 'alerts.view.department', 'audit-logs.view']) },
-    { name: 'Funcionario', description: 'Funcionario encargado de registrar y gestionar trámites y documentos.', permissions: JSON.stringify(['dashboard.view', 'procedures.create', 'procedures.view', 'documents.view', 'documents.create']) },
-    { name: 'Recepción Documental', description: 'Funcionario encargado de registrar trámites y documentos iniciales.', permissions: JSON.stringify(['dashboard.view', 'procedures.create', 'procedures.view']) },
+    { name: 'Funcionario', description: 'Funcionario encargado de registrar y gestionar trámites y documentos.', permissions: JSON.stringify(['dashboard.view', 'procedures.create', 'procedures.view', 'procedures.manage', 'documents.view', 'documents.create']) },
+    { name: 'Recepción Documental', description: 'Funcionario encargado de registrar trámites y documentos iniciales.', permissions: JSON.stringify(['dashboard.view', 'procedures.create', 'procedures.view', 'procedures.manage']) },
     { name: 'Auditor', description: 'Usuario autorizado para consultar bitácoras, reportes e integridad documental.', permissions: JSON.stringify(['dashboard.view', 'reports.view', 'logs.view', 'audit-logs.view']) },
   ];
 

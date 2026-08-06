@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { Workflow, WorkflowNode, Department, ProcedureType, AuditLog } from '../models/index.js';
+import { Workflow, WorkflowNode, Department, ProcedureType, AuditLog, Procedure } from '../models/index.js';
 import { authenticate, requirePermission } from '../middlewares/auth.js';
 
 const router = Router();
@@ -16,7 +16,15 @@ router.get('/', async (req, res) => {
       ],
       order: [['createdAt', 'DESC']]
     });
-    return res.json(list);
+
+    const listWithInUse = await Promise.all(list.map(async (flow: any) => {
+      const count = await Procedure.count({ where: { typeId: flow.procedureTypeId } });
+      const flowJSON = flow.toJSON();
+      flowJSON.inUse = count > 0;
+      return flowJSON;
+    }));
+
+    return res.json(listWithInUse);
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
   }
@@ -32,7 +40,10 @@ router.get('/:id', async (req, res) => {
       ]
     });
     if (!flow) return res.status(404).json({ error: 'Flujo no encontrado.' });
-    return res.json(flow);
+    const count = await Procedure.count({ where: { typeId: flow.procedureTypeId } });
+    const flowJSON = flow.toJSON();
+    flowJSON.inUse = count > 0;
+    return res.json(flowJSON);
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
   }
@@ -102,6 +113,11 @@ router.delete('/:id', requirePermission(['catalogs.manage', 'all']), async (req,
   try {
     const flow = await Workflow.findByPk(req.params.id as string);
     if (!flow) return res.status(404).json({ error: 'Flujo no encontrado.' });
+
+    const count = await Procedure.count({ where: { typeId: flow.procedureTypeId } });
+    if (count > 0) {
+      return res.status(400).json({ error: 'No se puede eliminar el flujo porque ya tiene trámites asociados.' });
+    }
 
     await flow.destroy();
 
