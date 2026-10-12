@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { Op } from 'sequelize';
 import { Procedure, Department, Document, User, ProcedureType, DocumentType, DocumentHistory, DocumentAlert, sequelize } from '../models/index.js';
 import { authenticate } from '../middlewares/auth.js';
 
@@ -6,16 +7,53 @@ const router = Router();
 
 router.use(authenticate);
 
+const canViewReports = (user: any): boolean => {
+  const permissions = user?.permissions || [];
+  const role = user?.roleName;
+  return (
+    permissions.includes('reports.view') ||
+    permissions.includes('procedures.view') ||
+    permissions.includes('all') ||
+    ['Administrador', 'Alcalde', 'Director Departamental', 'Auditor', 'Funcionario'].includes(role)
+  );
+};
+
 // /api/reports/procedures
 router.get('/procedures', async (req, res) => {
   const user = req.user!;
-  const permissions = user.permissions || [];
-  if (!permissions.includes('reports.view') && !permissions.includes('all') && user.roleName !== 'Administrador') {
+  if (!canViewReports(user)) {
     return res.status(403).json({ error: 'Acceso denegado a reportes.' });
   }
 
+  const { departmentId, status, startDate, endDate } = req.query as any;
+
   try {
-    const total = await Procedure.count();
+    const where: any = {};
+
+    // Si es Director Departamental y no tiene 'all', filtrar por su departamento por defecto si no es admin
+    if (user.roleName === 'Director Departamental' && user.departmentId) {
+      where.departmentId = user.departmentId;
+    } else if (departmentId && departmentId !== 'ALL') {
+      where.departmentId = departmentId;
+    }
+
+    if (status && status !== 'ALL' && status !== 'undefined') {
+      where.status = status;
+    }
+
+    const isValidDate = (d: any) => d && d !== 'undefined' && d !== 'null' && !isNaN(new Date(d).getTime());
+
+    if (isValidDate(startDate) || isValidDate(endDate)) {
+      where.createdAt = {};
+      if (isValidDate(startDate)) where.createdAt[Op.gte] = new Date(startDate);
+      if (isValidDate(endDate)) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        where.createdAt[Op.lte] = end;
+      }
+    }
+
+    const total = await Procedure.count({ where });
 
     // Group by status
     const byStatusRaw = await Procedure.findAll({
@@ -23,6 +61,7 @@ router.get('/procedures', async (req, res) => {
         'status',
         [sequelize.fn('COUNT', sequelize.col('id')), 'count']
       ],
+      where,
       group: ['status']
     });
 
@@ -37,6 +76,7 @@ router.get('/procedures', async (req, res) => {
         'departmentId',
         [sequelize.fn('COUNT', sequelize.col('id')), 'count']
       ],
+      where,
       group: ['departmentId']
     });
 
@@ -50,7 +90,7 @@ router.get('/procedures', async (req, res) => {
 
     // Avg Time for finished procedures
     const finishedProcs = await Procedure.findAll({
-      where: { status: 'FINALIZADO' as any },
+      where: { ...where, status: 'FINALIZADO' as any },
       attributes: ['createdAt', 'updatedAt']
     });
 
@@ -61,13 +101,20 @@ router.get('/procedures', async (req, res) => {
     }
 
     const detailedProcedures = await Procedure.findAll({
-      limit: 50,
+      where,
+      limit: 100,
       order: [['createdAt', 'DESC']],
-      include: [{ association: 'department' }]
+      include: [
+        { association: 'department', attributes: ['name'] },
+        { association: 'assignee', attributes: ['name', 'email'] },
+        { association: 'type', attributes: ['name'] }
+      ]
     });
 
+    const safeTotal = Math.max(Number(total) || 0, detailedProcedures.length);
+
     return res.json({
-      total,
+      total: safeTotal,
       avgHours,
       byStatus,
       byDepartment,
@@ -81,22 +128,51 @@ router.get('/procedures', async (req, res) => {
 // /api/reports/documents
 router.get('/documents', async (req, res) => {
   const user = req.user!;
-  const permissions = user.permissions || [];
-  if (!permissions.includes('reports.view') && !permissions.includes('all') && user.roleName !== 'Administrador') {
+  if (!canViewReports(user)) {
     return res.status(403).json({ error: 'Acceso denegado a reportes.' });
   }
 
+  const { departmentId, status, typeId, startDate, endDate } = req.query as any;
+
   try {
-    const total = await Document.count({
-      where: { deletedAt: null }
-    });
+    const where: any = { deletedAt: null };
+
+    if (user.roleName === 'Director Departamental' && user.departmentId) {
+      where.departmentId = user.departmentId;
+    } else if (departmentId && departmentId !== 'ALL') {
+      where.departmentId = departmentId;
+    }
+
+    // Solo aplicar filtro de estado si es un DocStatus válido
+    const validDocStatuses = ['DRAFT', 'PENDING_LEADER', 'APPROVED', 'REJECTED', 'PENDING_MAYOR', 'SENT_TO_DEPT', 'ASSIGNED_TO_EMPLOYEE', 'RESPONDED'];
+    if (status && status !== 'ALL' && status !== 'undefined' && validDocStatuses.includes(status)) {
+      where.status = status;
+    }
+
+    if (typeId && typeId !== 'ALL' && typeId !== 'undefined') {
+      where.typeId = typeId;
+    }
+
+    const isValidDate = (d: any) => d && d !== 'undefined' && d !== 'null' && !isNaN(new Date(d).getTime());
+
+    if (isValidDate(startDate) || isValidDate(endDate)) {
+      where.createdAt = {};
+      if (isValidDate(startDate)) where.createdAt[Op.gte] = new Date(startDate);
+      if (isValidDate(endDate)) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        where.createdAt[Op.lte] = end;
+      }
+    }
+
+    const total = await Document.count({ where });
 
     const byStatusRaw = await Document.findAll({
       attributes: [
         'status',
         [sequelize.fn('COUNT', sequelize.col('id')), 'count']
       ],
-      where: { deletedAt: null },
+      where,
       group: ['status']
     });
 
@@ -110,7 +186,7 @@ router.get('/documents', async (req, res) => {
         'typeId',
         [sequelize.fn('COUNT', sequelize.col('id')), 'count']
       ],
-      where: { deletedAt: null },
+      where,
       group: ['typeId']
     });
 
@@ -122,14 +198,21 @@ router.get('/documents', async (req, res) => {
     }, {} as Record<string, number>);
 
     const detailedDocs = await Document.findAll({
-      where: { deletedAt: null },
-      limit: 50,
+      where,
+      limit: 100,
       order: [['createdAt', 'DESC']],
-      include: [{ association: 'type' }, { association: 'procedure' }]
+      include: [
+        { association: 'type', attributes: ['name'] },
+        { association: 'procedure', attributes: ['code', 'subject'] },
+        { association: 'department', attributes: ['name'] },
+        { association: 'creator', attributes: ['name'] }
+      ]
     });
 
+    const safeTotal = Math.max(Number(total) || 0, detailedDocs.length);
+
     return res.json({
-      total,
+      total: safeTotal,
       byStatus,
       byType,
       detailed: detailedDocs

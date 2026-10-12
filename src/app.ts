@@ -20,6 +20,7 @@ import auditRoutes from './routes/audit.js';
 import reportsRoutes from './routes/reports.js';
 import workflowRoutes from './routes/workflows.js';
 import archiveRoutes from './routes/archives.js';
+import settingsRoutes from './routes/settings.js';
 import { ensureStorageDirs } from './utils/storage.js';
 
 export async function buildApp() {
@@ -41,6 +42,14 @@ export async function buildApp() {
 
   // Configurar archivos estáticos (para descargar documentos y plantillas)
   app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
+
+  // Evitar que el navegador guarde en caché respuestas de la API (contadores siempre actualizados)
+  app.set('etag', false);
+  app.use('/api', (_req, res, next) => {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.set('Pragma', 'no-cache');
+    next();
+  });
 
   // Inicializar base de datos con Sequelize
   try {
@@ -71,6 +80,7 @@ export async function buildApp() {
   app.use('/api/reports', reportsRoutes);
   app.use('/api/workflows', workflowRoutes);
   app.use('/api/archives', archiveRoutes);
+  app.use('/api/settings', settingsRoutes);
 
   return app;
 }

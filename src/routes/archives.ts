@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { Warehouse, Sector, Section, Procedure, Period, AuditLog } from '../models/index.js';
+import { Warehouse, Sector, Section, Procedure, ProcedureMovement, Period, AuditLog } from '../models/index.js';
 import { authenticate, requirePermission } from '../middlewares/auth.js';
 
 const router = Router();
@@ -159,7 +159,20 @@ router.post('/finalize-physical', async (req, res) => {
       sectorId,
       sectionId,
       folderCode,
-      status: 'ARCHIVADO' // Actualizar estado a ARCHIVADO
+      status: 'ARCHIVADO' as any
+    });
+
+    await ProcedureMovement.create({
+      procedureId: procedure.id,
+      fromUserId: req.user!.id,
+      fromDepartmentId: req.user!.departmentId,
+      toDepartmentId: procedure.departmentId,
+      toUserId: procedure.assigneeId,
+      action: 'ARCHIVADO_FISICO',
+      status: 'ARCHIVADO' as any,
+      notes: `Expediente archivado en custodia física. Bodega ID: ${warehouseId}, Sector: ${sectorId}, Sección: ${sectionId}, Código de Carpeta: ${folderCode}`,
+      typeEnvio: 'PARA',
+      sentEmail: false
     });
 
     await AuditLog.create({

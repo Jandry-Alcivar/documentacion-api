@@ -8,21 +8,29 @@ import * as fs from 'fs';
 import { saveDocumentFile, getAbsolutePathFromUrl, deletePhysicalFile } from '../utils/storage.js';
 import { calculateBufferHash, calculateFileHash } from '../utils/hash.js';
 import { authenticate } from '../middlewares/auth.js';
-import { createRequire } from 'module';
-
-const require = createRequire(import.meta.url);
-const signerModule = require('node-signpdf');
-const signer = signerModule.default || signerModule;
-
-const plainAddPlaceholderModule = require('node-signpdf/dist/helpers/plainAddPlaceholder');
-const plainAddPlaceholder = typeof plainAddPlaceholderModule === 'function'
-  ? plainAddPlaceholderModule
-  : (plainAddPlaceholderModule.plainAddPlaceholder || plainAddPlaceholderModule.default || plainAddPlaceholderModule);
+import { guardDocumentSealed } from '../services/seal.js';
+let signer: any = null;
+let plainAddPlaceholder: any = null;
+try {
+  // @ts-ignore
+  const req = typeof __non_webpack_require__ !== 'undefined' ? __non_webpack_require__ : (typeof require !== 'undefined' ? require : null);
+  if (req) {
+    const signerModule = req('node-signpdf');
+    signer = signerModule?.default || signerModule;
+    const plainAddPlaceholderModule = req('node-signpdf/dist/helpers/plainAddPlaceholder');
+    plainAddPlaceholder = typeof plainAddPlaceholderModule === 'function'
+      ? plainAddPlaceholderModule
+      : (plainAddPlaceholderModule?.plainAddPlaceholder || plainAddPlaceholderModule?.default || plainAddPlaceholderModule);
+  }
+} catch (e) {
+  // node-signpdf fallback
+}
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
 router.use(authenticate);
+router.use('/:id', guardDocumentSealed);
 
 // Helper para obtener los UUIDs de los tipos de documento confidenciales (QUEJA y RENUNCIA)
 async function getSensitiveTypeIds(): Promise<string[]> {

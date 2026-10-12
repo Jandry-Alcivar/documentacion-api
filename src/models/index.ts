@@ -150,6 +150,8 @@ export class Procedure extends Model {
   declare applicantId?: string | null;
   declare applicantEmail?: string | null;
   declare applicantPhone?: string | null;
+  declare applicantAddress?: string | null;
+  declare applicantInstitution?: string | null;
   declare expirationDate?: Date | null;
   declare typeId: string;
   declare departmentId: string;
@@ -158,6 +160,9 @@ export class Procedure extends Model {
   declare sectorId?: string | null;
   declare sectionId?: string | null;
   declare folderCode?: string | null;
+  declare sealHash?: string | null;
+  declare sealedAt?: Date | null;
+  declare sealedById?: string | null;
   declare readonly createdAt: Date;
   declare readonly updatedAt: Date;
 
@@ -166,6 +171,7 @@ export class Procedure extends Model {
   declare department: any;
   declare assignee: any;
   declare documents: any[];
+  declare movements: any[];
 }
 Procedure.init({
   id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
@@ -174,10 +180,12 @@ Procedure.init({
   description: { type: DataTypes.TEXT, allowNull: false },
   priority: { type: DataTypes.ENUM(...Object.values(ProcedurePriority)), defaultValue: ProcedurePriority.NORMAL, allowNull: false },
   status: { type: DataTypes.ENUM(...Object.values(ProcedureStatus)), defaultValue: ProcedureStatus.REGISTRADO, allowNull: false },
-  applicantName: { type: DataTypes.STRING, allowNull: false },
+  applicantName: { type: DataTypes.STRING, allowNull: true, defaultValue: 'Trámite Interno / Sin solicitante' },
   applicantId: { type: DataTypes.STRING, allowNull: true },
   applicantEmail: { type: DataTypes.STRING, allowNull: true },
   applicantPhone: { type: DataTypes.STRING, allowNull: true },
+  applicantAddress: { type: DataTypes.STRING, allowNull: true },
+  applicantInstitution: { type: DataTypes.STRING, allowNull: true },
   expirationDate: { type: DataTypes.DATE, allowNull: true },
   typeId: { type: DataTypes.UUID, allowNull: false },
   departmentId: { type: DataTypes.UUID, allowNull: false },
@@ -185,8 +193,62 @@ Procedure.init({
   warehouseId: { type: DataTypes.UUID, allowNull: true },
   sectorId: { type: DataTypes.UUID, allowNull: true },
   sectionId: { type: DataTypes.UUID, allowNull: true },
-  folderCode: { type: DataTypes.STRING, allowNull: true }
+  folderCode: { type: DataTypes.STRING, allowNull: true },
+  sealHash: { type: DataTypes.STRING(64), allowNull: true },
+  sealedAt: { type: DataTypes.DATE, allowNull: true },
+  sealedById: { type: DataTypes.UUID, allowNull: true }
 }, { sequelize, tableName: 'Procedure', timestamps: true });
+
+// 6.0 SystemSetting (clave/valor de configuración global)
+export class SystemSetting extends Model {
+  declare key: string;
+  declare value: string;
+}
+SystemSetting.init({
+  key: { type: DataTypes.STRING, primaryKey: true },
+  value: { type: DataTypes.TEXT, allowNull: false }
+}, { sequelize, tableName: 'SystemSetting', timestamps: true });
+
+// 6.1 ProcedureMovement Model
+export class ProcedureMovement extends Model {
+  declare id: string;
+  declare procedureId: string;
+  declare fromUserId?: string | null;
+  declare fromDepartmentId: string;
+  declare toUserId?: string | null;
+  declare toDepartmentId: string;
+  declare action: string; // 'CREACION' | 'DERIVACION' | 'DEVOLUCION' | 'AGREGAR_DOCUMENTO' | 'FIRMA_DOCUMENTO' | 'FINALIZACION' | 'ENVIO_CORREO' | 'REAPERTURA'
+  declare status: ProcedureStatus;
+  declare notes?: string | null;
+  declare attachedDocumentId?: string | null;
+  declare typeEnvio: string; // 'PARA' | 'COPIA'
+  declare sentEmail: boolean;
+  declare emailRecipients?: any | null;
+  declare readonly createdAt: Date;
+
+  // Associations
+  declare procedure: any;
+  declare fromUser: any;
+  declare fromDepartment: any;
+  declare toUser: any;
+  declare toDepartment: any;
+  declare attachedDocument: any;
+}
+ProcedureMovement.init({
+  id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+  procedureId: { type: DataTypes.UUID, allowNull: false },
+  fromUserId: { type: DataTypes.UUID, allowNull: true },
+  fromDepartmentId: { type: DataTypes.UUID, allowNull: false },
+  toUserId: { type: DataTypes.UUID, allowNull: true },
+  toDepartmentId: { type: DataTypes.UUID, allowNull: false },
+  action: { type: DataTypes.STRING, allowNull: false },
+  status: { type: DataTypes.ENUM(...Object.values(ProcedureStatus)), defaultValue: ProcedureStatus.REGISTRADO, allowNull: false },
+  notes: { type: DataTypes.TEXT, allowNull: true },
+  attachedDocumentId: { type: DataTypes.UUID, allowNull: true },
+  typeEnvio: { type: DataTypes.STRING, defaultValue: 'PARA', allowNull: false },
+  sentEmail: { type: DataTypes.BOOLEAN, defaultValue: false, allowNull: false },
+  emailRecipients: { type: DataTypes.JSONB, allowNull: true }
+}, { sequelize, tableName: 'ProcedureMovement', timestamps: true, updatedAt: false });
 
 // 7. Document Model
 export class Document extends Model {
@@ -366,6 +428,7 @@ export class Workflow extends Model {
   declare description?: string | null;
   declare procedureTypeId: string;
   declare isActive: boolean;
+  declare nodes?: any[];
 }
 Workflow.init({
   id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
@@ -550,3 +613,19 @@ Section.belongsTo(Sector, { foreignKey: 'sectorId', as: 'sector' });
 Procedure.belongsTo(Warehouse, { foreignKey: 'warehouseId', as: 'warehouse' });
 Procedure.belongsTo(Sector, { foreignKey: 'sectorId', as: 'sector' });
 Procedure.belongsTo(Section, { foreignKey: 'sectionId', as: 'section' });
+
+// Procedure <-> ProcedureMovement
+Procedure.hasMany(ProcedureMovement, { foreignKey: 'procedureId', as: 'movements', onDelete: 'CASCADE' });
+ProcedureMovement.belongsTo(Procedure, { foreignKey: 'procedureId', as: 'procedure' });
+
+// ProcedureMovement <-> User (fromUser & toUser)
+ProcedureMovement.belongsTo(User, { foreignKey: 'fromUserId', as: 'fromUser' });
+ProcedureMovement.belongsTo(User, { foreignKey: 'toUserId', as: 'toUser' });
+
+// ProcedureMovement <-> Department (fromDepartment & toDepartment)
+ProcedureMovement.belongsTo(Department, { foreignKey: 'fromDepartmentId', as: 'fromDepartment' });
+ProcedureMovement.belongsTo(Department, { foreignKey: 'toDepartmentId', as: 'toDepartment' });
+
+// ProcedureMovement <-> Document (attachedDocument)
+ProcedureMovement.belongsTo(Document, { foreignKey: 'attachedDocumentId', as: 'attachedDocument' });
+
